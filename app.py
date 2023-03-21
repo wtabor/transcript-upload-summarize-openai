@@ -3,9 +3,6 @@ import openai, config
 
 openai.api_key = config.OPENAI_API_KEY
 
-# Define initial system message
-messages = [{"role": "system", "content": ''}]
-
 # Define available prompts for user to choose from
 prompts = [
     "1. Create a detailed summary outline of the transcription in meeting notes organized by discussion topics and 2. List action items and key metrics or numbers discussed; use appropriate formatting for all notes such as bullet points, numbered lists, bold or italicized text to enhance the organization and readability of the notes.",
@@ -19,12 +16,16 @@ def split_text(text, max_tokens):
     chunks = []
     current_chunk = []
 
+    current_tokens = 0
     for word in words:
-        if len(' '.join(current_chunk + [word])) <= max_tokens:
+        word_tokens = len(word) + 1  # Include space before the word
+        if current_tokens + word_tokens <= max_tokens:
             current_chunk.append(word)
+            current_tokens += word_tokens
         else:
             chunks.append(' '.join(current_chunk))
             current_chunk = [word]
+            current_tokens = word_tokens
 
     if current_chunk:
         chunks.append(' '.join(current_chunk))
@@ -32,48 +33,37 @@ def split_text(text, max_tokens):
     return chunks
 
 def transcribe(prompt, text_file):
-    global messages
-
-    with open(text_file, "r") as file:
-        transcript_text = file.read()
+    # Read the content of the text_file directly
+    transcript_text = text_file.read().decode("utf-8")
 
     transcript_chunks = split_text(transcript_text, MAX_TOKENS)
+    summarized_chunks = []
 
     for chunk in transcript_chunks:
-        messages.append({"role": "user", "content": chunk})
+        prompt_text = f"{prompt}\n{chunk}\nAssistant:"
 
-        # Call OpenAI API only if there is a user message
-        if messages[-1]["role"] == "user":
-            # Use selected prompt as the instructions for OpenAI
-            prompt_text = prompt
+        response = openai.Completion.create(
+            engine="text-davinci-003",
+            prompt=prompt_text,
+            max_tokens=3000,
+            n=1,
+            stop=None,
+            temperature=0.7,
+        )
 
-            response = openai.Completion.create(
-                engine="text-davinci-003",
-                prompt='\n'.join([m["content"] for m in messages] + [prompt_text]),
-                max_tokens=3000,
-                n=1,
-                stop=None,
-                temperature=0.7,
-            )
+        system_message = response.choices[0].text.strip()
+        summarized_chunks.append(system_message)
 
-            system_message = response.choices[0].text.strip()
-            messages.append({"role": "system", "content": system_message})
+    summarized_text = "\n\n".join(summarized_chunks)
 
-    chat_transcript = ""
-    for message in messages:
-        if message["role"] == "system":
-            chat_transcript += message["content"] + "\n\n"
-        else:
-            chat_transcript += message["content"] + "\n\n"
-
-    return chat_transcript
+    return summarized_text
 
 # Set up Gradio interface
 ui = gr.Interface(
     fn=transcribe,
     inputs=[
-        gr.Dropdown(choices=prompts, label="Choose a prompt:", default=[0]),
-        gr.File(type="txt", label="Upload your text file:")
+        gr.Dropdown(choices=prompts, label="Choose a prompt:"),
+        gr.File(type="file", label="Upload your text file:")
     ],
     outputs="text",
     title="Investment Banker Personal Assistant",
